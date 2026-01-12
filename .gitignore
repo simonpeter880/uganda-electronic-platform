@@ -1,0 +1,76 @@
+# Environment files - NEVER commit these!
+.env
+.env.local
+.env.production
+.env.*.local
+*.env
+
+# Backups
+backups/
+*.sql
+*.sql.gz
+
+# Logs
+nginx/logs/
+*.log
+
+# SSL Certificates
+nginx/ssl/*.pem
+nginx/ssl/*.key
+
+# Docker volumes
+postgres_data/
+redis_data/
+saleor_media/
+
+# Node modules
+node_modules/
+storefront/node_modules/
+.pnpm-store/
+
+# Next.js
+storefront/.next/
+storefront/out/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Test coverage
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Generated files
+storefront/.graphqlrc.ts
+
+# Saleor
+saleor-platform/venv/
+saleor-platform/.coverage
+saleor-platform/static/
+
+# Docker
+docker-compose.override.yml

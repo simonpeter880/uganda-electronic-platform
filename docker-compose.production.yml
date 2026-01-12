@@ -1,0 +1,147 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    restart: always
+    networks:
+      - backend
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=saleor
+      - POSTGRES_USER=saleor
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saleor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  cache:
+    image: valkey/valkey:8.1-alpine
+    restart: always
+    networks:
+      - backend
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Saleor API
+  api:
+    image: ghcr.io/saleor/saleor:3.22
+    restart: always
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    volumes:
+      - saleor_media:/app/media
+      - ./uganda-backend-code:/app/custom
+    env_file:
+      - .env.production
+    environment:
+      - DATABASE_URL=postgres://saleor:${DB_PASSWORD}@db:5432/saleor
+      - CACHE_URL=redis://cache:6379/0
+      - CELERY_BROKER_URL=redis://cache:6379/1
+      - DASHBOARD_URL=${DASHBOARD_URL}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - ALLOWED_CLIENT_HOSTS=${ALLOWED_CLIENT_HOSTS}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import requests; requests.get(\"http://localhost:8000/health/\")' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Celery Worker
+  worker:
+    image: ghcr.io/saleor/saleor:3.22
+    command: celery -A saleor --app=saleor.celeryconf:app worker --loglevel=info -B
+    restart: always
+    networks:
+      - backend
+    depends_on:
+      - cache
+      - api
+    volumes:
+      - saleor_media:/app/media
+      - ./uganda-backend-code:/app/custom
+    env_file:
+      - .env.production
+    environment:
+      - DATABASE_URL=postgres://saleor:${DB_PASSWORD}@db:5432/saleor
+      - CACHE_URL=redis://cache:6379/0
+      - CELERY_BROKER_URL=redis://cache:6379/1
+
+  # Saleor Dashboard
+  dashboard:
+    image: ghcr.io/saleor/saleor-dashboard:latest
+    restart: always
+    networks:
+      - backend
+    environment:
+      - API_URL=${DASHBOARD_URL}
+
+  # Next.js Storefront
+  storefront:
+    build:
+      context: ./storefront-uganda
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_SALEOR_API_URL=${NEXT_PUBLIC_SALEOR_API_URL}
+        - NEXT_PUBLIC_STOREFRONT_URL=${NEXT_PUBLIC_STOREFRONT_URL}
+        - NEXT_PUBLIC_DEFAULT_CHANNEL=default-channel
+    restart: always
+    networks:
+      - backend
+    environment:
+      - NEXT_PUBLIC_SALEOR_API_URL=${NEXT_PUBLIC_SALEOR_API_URL}
+      - NEXT_PUBLIC_STOREFRONT_URL=${NEXT_PUBLIC_STOREFRONT_URL}
+      - NEXT_PUBLIC_DEFAULT_CHANNEL=default-channel
+      - SALEOR_APP_TOKEN=${SALEOR_APP_TOKEN}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - backend
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/logs:/var/log/nginx
+    depends_on:
+      - api
+      - dashboard
+      - storefront
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  saleor_media:
+    driver: local
+
+networks:
+  backend:
+    driver: bridge
