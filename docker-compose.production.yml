@@ -28,15 +28,16 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Saleor API
-  api:
+  # Database Migration (runs once on deploy)
+  migrate:
     image: ghcr.io/saleor/saleor:3.22
-    restart: always
+    command: sh -c "python manage.py migrate && python manage.py collectstatic --noinput"
+    restart: on-failure
     networks:
       - backend
     depends_on:
@@ -53,11 +54,34 @@ services:
       - DATABASE_URL=postgres://saleor:${DB_PASSWORD}@db:5432/saleor
       - CACHE_URL=redis://cache:6379/0
       - CELERY_BROKER_URL=redis://cache:6379/1
+
+  # Saleor API
+  api:
+    image: ghcr.io/saleor/saleor:3.22
+    restart: always
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - saleor_media:/app/media
+      - ./backend/custom:/app/custom
+    env_file:
+      - .env.production
+    environment:
+      - DATABASE_URL=postgres://saleor:${DB_PASSWORD}@db:5432/saleor
+      - CACHE_URL=redis://cache:6379/0
+      - CELERY_BROKER_URL=redis://cache:6379/1
       - DASHBOARD_URL=${DASHBOARD_URL}
       - ALLOWED_HOSTS=${ALLOWED_HOSTS}
       - ALLOWED_CLIENT_HOSTS=${ALLOWED_CLIENT_HOSTS}
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import requests; requests.get(\"http://localhost:8000/health/\")' || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -66,7 +90,27 @@ services:
   # Celery Worker
   worker:
     image: ghcr.io/saleor/saleor:3.22
-    command: celery -A saleor --app=saleor.celeryconf:app worker --loglevel=info -B
+    command: celery -A saleor --app=saleor.celeryconf:app worker --loglevel=info
+    restart: always
+    networks:
+      - backend
+    depends_on:
+      - cache
+      - api
+    volumes:
+      - saleor_media:/app/media
+      - ./backend/custom:/app/custom
+    env_file:
+      - .env.production
+    environment:
+      - DATABASE_URL=postgres://saleor:${DB_PASSWORD}@db:5432/saleor
+      - CACHE_URL=redis://cache:6379/0
+      - CELERY_BROKER_URL=redis://cache:6379/1
+
+  # Celery Beat Scheduler
+  beat:
+    image: ghcr.io/saleor/saleor:3.22
+    command: celery -A saleor --app=saleor.celeryconf:app beat --loglevel=info
     restart: always
     networks:
       - backend
@@ -85,7 +129,7 @@ services:
 
   # Saleor Dashboard
   dashboard:
-    image: ghcr.io/saleor/saleor-dashboard:latest
+    image: ghcr.io/saleor/saleor-dashboard:3.22
     restart: always
     networks:
       - backend
@@ -128,7 +172,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
-      - ./nginx/logs:/var/log/nginx
+      - nginx_logs:/var/log/nginx
     depends_on:
       - api
       - dashboard
@@ -140,6 +184,8 @@ volumes:
   redis_data:
     driver: local
   saleor_media:
+    driver: local
+  nginx_logs:
     driver: local
 
 networks:
