@@ -8,9 +8,6 @@
 
 set -e  # Exit on error
 
-echo "🚀 Starting deployment of Uganda Electronics Platform..."
-echo ""
-
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -34,6 +31,28 @@ print_warning() {
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
+
+# ============================================
+# Deployment Lock & Error Handling
+# ============================================
+
+# Prevent concurrent deployments
+LOCKFILE="/tmp/uganda_electronics_deploy.lock"
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+    print_error "Another deployment is already running."
+    print_error "If this is incorrect, remove: $LOCKFILE"
+    exit 1
+fi
+
+# Show which line failed when an error occurs
+trap 'print_error "Deployment failed at line $LINENO. Check logs above for details."; exit 1' ERR
+
+# Release lock on exit
+trap 'flock -u 200' EXIT
+
+echo "🚀 Starting deployment of Uganda Electronics Platform..."
+echo ""
 
 # Check if running as root or with sudo
 if [ "$EUID" -eq 0 ]; then
@@ -127,45 +146,35 @@ print_success "All required environment variables are set"
 # ============================================
 print_status "Creating required directories..."
 
-mkdir -p nginx/logs
+# Note: nginx/logs should be managed via Docker volumes (see docker-compose.yml)
+# Only create SSL directory for certificate storage
 mkdir -p nginx/ssl
 mkdir -p backups
 
 print_success "Directories created"
 
 # ============================================
-# 4. Pull Docker Images
+# 4. Pull & Deploy Services (Zero-Downtime)
 # ============================================
-print_status "Pulling Docker images..."
+print_status "Pulling latest images..."
 
 docker compose -f docker-compose.production.yml pull
 
-print_success "Docker images pulled"
+print_success "Images pulled"
+
+print_status "Starting/updating services..."
+
+# Deploy without stopping (rolling restart of changed services only)
+# --remove-orphans: cleanup containers for removed services
+# --build: rebuild services that need it (like storefront)
+# This recreates only containers that have changed, minimizing downtime
+docker compose -f docker-compose.production.yml up -d --remove-orphans --build
+
+print_success "Services started/updated"
+print_status "Note: Use '--force-recreate' flag to rebuild all containers, or run 'down' manually for major changes"
 
 # ============================================
-# 5. Build Storefront
-# ============================================
-print_status "Building storefront..."
-
-docker compose -f docker-compose.production.yml build storefront
-
-print_success "Storefront built"
-
-# ============================================
-# 6. Start Services
-# ============================================
-print_status "Starting services..."
-
-# Stop any running containers
-docker compose -f docker-compose.production.yml down
-
-# Start services
-docker compose -f docker-compose.production.yml up -d
-
-print_success "Services started"
-
-# ============================================
-# 7. Wait for Services to be Ready
+# 5. Wait for Services to be Ready
 # ============================================
 print_status "Waiting for services to be ready..."
 
@@ -177,12 +186,13 @@ until docker compose -f docker-compose.production.yml exec -T db pg_isready -U s
 done
 echo " Ready!"
 
-# Wait for API
-echo -n "Waiting for API..."
-MAX_RETRIES=30
+# Wait for API to be serving requests
+echo -n "Waiting for API to be ready..."
+MAX_RETRIES=60
 RETRY_COUNT=0
 until [ $RETRY_COUNT -ge $MAX_RETRIES ]; do
-    if docker compose -f docker-compose.production.yml exec -T api python -c "import sys; sys.exit(0)" > /dev/null 2>&1; then
+    # Check if API health endpoint responds (or GraphQL endpoint for Saleor)
+    if curl -f -s http://localhost:8000/graphql/ > /dev/null 2>&1; then
         echo " Ready!"
         break
     fi
@@ -192,14 +202,14 @@ until [ $RETRY_COUNT -ge $MAX_RETRIES ]; do
 done
 
 if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-    print_error "API failed to start"
+    print_error "API failed to start - check logs with: docker compose -f docker-compose.production.yml logs api"
     exit 1
 fi
 
 print_success "All services are ready"
 
 # ============================================
-# 8. Run Database Migrations
+# 6. Run Database Migrations
 # ============================================
 print_status "Running database migrations..."
 
@@ -208,7 +218,7 @@ docker compose -f docker-compose.production.yml exec -T api python manage.py mig
 print_success "Database migrations completed"
 
 # ============================================
-# 9. Create Superuser (if first deployment)
+# 7. Create Superuser (if first deployment)
 # ============================================
 if [ "$1" == "--first-time" ]; then
     print_status "Creating superuser account..."
@@ -218,7 +228,7 @@ if [ "$1" == "--first-time" ]; then
 fi
 
 # ============================================
-# 10. Collect Static Files
+# 8. Collect Static Files
 # ============================================
 print_status "Collecting static files..."
 
@@ -227,34 +237,38 @@ docker compose -f docker-compose.production.yml exec -T api python manage.py col
 print_success "Static files collected"
 
 # ============================================
-# 11. Run Uganda Platform Migrations (if exist)
+# 9. Run Uganda Platform Migrations (if exist)
 # ============================================
 if [ -d "saleor-platform-uganda/migrations/uganda-platform" ]; then
     print_status "Running Uganda platform migrations..."
 
-    # Copy migrations to container
-    docker compose -f docker-compose.production.yml cp saleor-platform-uganda/migrations/uganda-platform api:/tmp/
+    # Copy migrations directory to db container
+    docker compose -f docker-compose.production.yml cp saleor-platform-uganda/migrations/uganda-platform db:/tmp/
 
-    # Run migrations
-    for migration in /tmp/uganda-platform/*.sql; do
+    # Run migrations inside the db container
+    for migration in saleor-platform-uganda/migrations/uganda-platform/*.sql; do
         if [ -f "$migration" ]; then
-            print_status "Running: $(basename $migration)"
-            docker compose -f docker-compose.production.yml exec -T db psql -U saleor -d saleor -f "$migration"
+            MIGRATION_NAME=$(basename "$migration")
+            print_status "Running: $MIGRATION_NAME"
+            docker compose -f docker-compose.production.yml exec -T db psql -U saleor -d saleor -f "/tmp/uganda-platform/$MIGRATION_NAME"
         fi
     done
+
+    # Cleanup
+    docker compose -f docker-compose.production.yml exec -T db rm -rf /tmp/uganda-platform
 
     print_success "Uganda platform migrations completed"
 fi
 
 # ============================================
-# 12. Display Service Status
+# 10. Display Service Status
 # ============================================
 print_status "Service Status:"
 echo ""
 docker compose -f docker-compose.production.yml ps
 
 # ============================================
-# 13. Display Access Information
+# 11. Display Access Information
 # ============================================
 echo ""
 print_success "🎉 Deployment completed successfully!"
@@ -290,7 +304,7 @@ print_warning "Run './setup-ssl.sh' to enable HTTPS with SSL certificate"
 echo ""
 
 # ============================================
-# 14. Useful Commands
+# 12. Useful Commands
 # ============================================
 echo "Useful commands:"
 echo "  View logs:        docker compose -f docker-compose.production.yml logs -f"
