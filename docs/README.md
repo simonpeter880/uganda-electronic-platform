@@ -38,14 +38,14 @@ uganda-electronics-platform/
 
 ## Features
 
-- Mobile Money Payments (MTN, Airtel)
-- SMS Notifications (Africa's Talking)
-- 135 Uganda Districts with delivery
-- Installment Payments
-- Two-Factor Authentication
-- Real-time Error Tracking (Sentry)
-- Automated Testing (35+ tests)
-- CI/CD Pipeline
+- ✅ Mobile Money Payments (MTN, Airtel)
+- ✅ SMS Notifications (Africa's Talking)
+- ✅ 135 Uganda Districts with delivery
+- ✅ Installment Payments
+- ✅ Two-Factor Authentication
+- ✅ Real-time Error Tracking (Sentry)
+- ✅ Automated Testing (35+ tests)
+- ✅ CI/CD Pipeline
 
 ## Tech Stack
 
