@@ -1,0 +1,7 @@
+# Sentry SDK for error tracking and performance monitoring
+
+# Core Sentry SDK
+sentry-sdk>=1.40.0
+
+# Django integration (includes Celery, Redis support)
+# This will be automatically detected by sentry-sdk when Django is present
