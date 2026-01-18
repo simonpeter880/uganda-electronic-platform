@@ -46,7 +46,7 @@ services:
         condition: service_healthy
     volumes:
       - saleor_media:/app/media
-      - ./uganda-backend-code:/app/custom
+      - ./backend/custom:/app/custom
     env_file:
       - .env.production
     environment:
@@ -75,7 +75,7 @@ services:
       - api
     volumes:
       - saleor_media:/app/media
-      - ./uganda-backend-code:/app/custom
+      - ./backend/custom:/app/custom
     env_file:
       - .env.production
     environment:
@@ -95,7 +95,7 @@ services:
   # Next.js Storefront
   storefront:
     build:
-      context: ./storefront-uganda
+      context: ./frontend
       dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_SALEOR_API_URL=${NEXT_PUBLIC_SALEOR_API_URL}
